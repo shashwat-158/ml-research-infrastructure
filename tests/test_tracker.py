@@ -1,0 +1,151 @@
+from pathlib import Path
+
+import pytest
+
+from ml_infra.config import RunConfig
+from ml_infra.results_db import ResultsDatabase
+from ml_infra.tracker import ExperimentTracker
+
+
+def make_config() -> RunConfig:
+    return RunConfig(
+        project="test-project",
+        run_name="tracker-test",
+        seed=42,
+        parameters={
+            "learning_rate": 0.001,
+        },
+        tags={
+            "stage": "test",
+        },
+    )
+
+
+def test_tracker_completes_successful_run(
+    tmp_path: Path,
+) -> None:
+    db = ResultsDatabase(
+        tmp_path / "results.sqlite"
+    )
+
+    tracker = ExperimentTracker(db)
+
+    config = make_config()
+
+    with tracker.run(
+        config,
+        git_commit="abc123",
+        dataset_version="dataset-v1",
+    ) as run:
+
+        run.log_metric(
+            "train_loss",
+            1.25,
+            step=1,
+        )
+
+        run.log_metric(
+            "train_loss",
+            1.10,
+            step=2,
+        )
+
+        run.log_param(
+            "optimizer",
+            "AdamW",
+        )
+
+    runs = db.list_runs(
+        project="test-project"
+    )
+
+    assert len(runs) == 1
+
+    stored_run = runs[0]
+
+    assert stored_run["status"] == "completed"
+    assert stored_run["seed"] == 42
+    assert stored_run["git_commit"] == "abc123"
+    assert stored_run["dataset_version"] == "dataset-v1"
+
+    metrics = db.get_metrics(
+        stored_run["run_id"]
+    )
+
+    assert len(metrics) == 2
+
+
+def test_tracker_marks_failed_run(
+    tmp_path: Path,
+) -> None:
+    db = ResultsDatabase(
+        tmp_path / "results.sqlite"
+    )
+
+    tracker = ExperimentTracker(db)
+
+    config = make_config()
+
+    with pytest.raises(RuntimeError):
+        with tracker.run(config) as run:
+
+            run.log_metric(
+                "train_loss",
+                3.0,
+                step=1,
+            )
+
+            raise RuntimeError(
+                "simulated training failure"
+            )
+
+    runs = db.list_runs(
+        project="test-project"
+    )
+
+    assert len(runs) == 1
+    assert runs[0]["status"] == "failed"
+
+
+def test_artifact_registration(
+    tmp_path: Path,
+) -> None:
+    db = ResultsDatabase(
+        tmp_path / "results.sqlite"
+    )
+
+    tracker = ExperimentTracker(db)
+
+    config = make_config()
+
+    artifact = tmp_path / "results.txt"
+
+    artifact.write_text(
+        "experiment completed",
+        encoding="utf-8",
+    )
+
+    with tracker.run(config) as run:
+        run.log_artifact(
+            artifact,
+            artifact_type="text",
+        )
+
+    # tests should preferably exercise the public interface, not the internals
+    row = db._connection.execute(
+        """
+        SELECT
+            name,
+            path,
+            artifact_type,
+            size_bytes,
+            sha256
+        FROM artifacts
+        """
+    ).fetchone()
+
+    assert row is not None
+    assert row["name"] == "results.txt"
+    assert row["artifact_type"] == "text"
+    assert row["size_bytes"] > 0
+    assert len(row["sha256"]) == 64
