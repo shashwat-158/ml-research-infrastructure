@@ -1,0 +1,15 @@
+project: example-project
+run_name: baseline
+
+seed: 42
+
+output_dir: runs
+
+parameters:
+  learning_rate: 0.0003
+  batch_size: 32
+  epochs: 10
+
+tags:
+  stage: baseline
+  purpose: infrastructure-test
