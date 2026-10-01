@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import sqlite3
+
 from ml_infra.results_db import ResultsDatabase
 
 
@@ -143,5 +145,52 @@ def test_run_can_fail(tmp_path: Path) -> None:
 
     assert run is not None
     assert run["status"] == "failed"
+
+    db.close()
+
+def test_existing_v1_database_is_migrated(
+    tmp_path,
+) -> None:
+    db_path = tmp_path / "legacy.sqlite"
+
+    connection = sqlite3.connect(db_path)
+
+    connection.execute(
+        """
+        CREATE TABLE runs (
+            run_id TEXT PRIMARY KEY
+        )
+        """
+    )
+
+    connection.commit()
+    connection.close()
+
+    db = ResultsDatabase(db_path)
+
+    assert db.schema_version() == 2
+
+    tables = db._connection.execute(
+        """
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'table'
+          AND name = 'checkpoints'
+        """
+    ).fetchone()
+
+    assert tables is not None
+
+    db.close()
+
+
+def test_new_database_starts_at_current_version(
+    tmp_path,
+) -> None:
+    db = ResultsDatabase(
+        tmp_path / "new.sqlite"
+    )
+
+    assert db.schema_version() == 2
 
     db.close()
