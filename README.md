@@ -9,7 +9,7 @@ Shared research tooling built for my [AI Research Ecosystem](https://github.com/
 - [x] Config system (runs driven by files, not hardcoded values)
 - [x] Dataset versioning
 - [x] Checkpoint manager
-- [ ] Shared evaluation framework
+- [x] Shared evaluation framework
 - [ ] Unified logging
 - [ ] Benchmark runner
 - [ ] GPU monitoring
@@ -68,6 +68,33 @@ with tracker.run(config) as run:
         1.23,
         step=100
     )
+
+# Evaluation
+from ml_infra.evaluation import (
+    EvaluationCase,
+    EvaluationRunner,
+    EvaluationSuite,
+    ExactMatchEvaluator,
+)
+
+suite = EvaluationSuite(
+    name="basic_reasoning",
+    cases=(
+        EvaluationCase(
+            case_id="case_001",
+            input="17 * 19",
+            expected="323",
+        ),
+    ),
+)
+
+runner = EvaluationRunner(db)
+
+report = runner.run(
+    suite,
+    model,
+    [ExactMatchEvaluator()],
+)
 ```
 Consuming repositories depend on these public interfaces rather than
 SQLite tables or internal implementation modules.
@@ -77,21 +104,25 @@ SQLite tables or internal implementation modules.
 ```text
              Experiment
                   │
-      ┌───────────┼───────────┐
-      ▼           ▼           ▼
-    Config       Code       Dataset
-      │           │           │
- config_hash  git_commit  version_id
-      │           │           │
-      └───────────┼───────────┘
+      ┌───────────┼────────────┐
+      ▼           ▼            ▼
+    Config       Code        Dataset
+      │           │            │
+ config_hash  git_commit   version_id
+      │           │            │
+      └───────────┼────────────┘
                   ▼
              Run identity
                   │
-             ┌────┴────┐
-             ▼         ▼
-        Checkpoints  Metrics
-             │
-          SHA-256
+       ┌──────────┼──────────┐
+       ▼          ▼          ▼
+ Checkpoints   Metrics   Evaluations
+    │                        │
+ SHA-256              ┌─────┴──────┐
+                      ▼            ▼
+                  case results   metrics
+                      │
+                  suite_hash
 ```
 
 ## Checkpointing
@@ -135,6 +166,72 @@ canonical manifest
 SHA-256 version identity
 ```
 
+## Evaluation Framework
+
+The shared evaluation framework separates system execution from grading.
+
+An evaluation consists of:
+
+```text
+Evaluation Suite
+    │
+    ├── Evaluation Cases
+    │
+    ├── Evaluators
+    │
+    └── Evaluation Runner
+            │
+            ▼
+       Case Results
+            │
+            ▼
+       Aggregated Metrics
+```
+Each evaluation records:
+
+- evaluation ID
+- suite name and deterministic suite hash
+- evaluator names
+- optional associated experiment run
+- random seed when applicable
+- case-level results
+- grader scores and pass/fail decisions
+- explanations and structured details
+- aggregate metrics
+- evaluation lifecycle status
+
+The framework is intentionally separate from benchmark orchestration:
+the evaluation framework defines how one system is evaluated, while the
+future benchmark runner will coordinate many evaluations across models,
+suites, configurations, and seeds.
+
 ## Used by
 
 Not yet integrated by another ecosystem repository.
+
+## Current Milestone
+Implemented:
+
+- configuration validation
+- deterministic configuration hashing
+- experiment lifecycle tracking
+- SQLite results database
+- incremental database migrations
+- metric and parameter logging
+- tags
+- artifact registration
+- atomic checkpoint persistence
+- SHA-256 checkpoint integrity verification
+- latest/best checkpoint tracking
+- content-addressed dataset versioning
+- dataset integrity verification
+- shared evaluation cases and suites
+- deterministic evaluation suite hashing
+- pluggable evaluator protocol
+- exact-match and numeric-tolerance evaluators
+- custom callable evaluators
+- case-level evaluation results
+- aggregate evaluation metrics
+- evaluation lifecycle tracking
+- evaluation-to-experiment linkage
+- integration tests

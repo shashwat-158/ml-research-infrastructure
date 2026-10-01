@@ -3,7 +3,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Self
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 
 SCHEMA_V1 = """
@@ -211,6 +211,113 @@ MIGRATIONS = {
 
     CREATE INDEX IF NOT EXISTS idx_dataset_files_sha256
         ON dataset_files(sha256);
+    """,
+        4: """
+    CREATE TABLE IF NOT EXISTS evaluation_runs (
+        evaluation_id TEXT PRIMARY KEY,
+
+        run_id TEXT,
+
+        suite_name TEXT NOT NULL,
+        suite_hash TEXT NOT NULL,
+
+        evaluator_names_json TEXT NOT NULL,
+        config_json TEXT NOT NULL,
+
+        seed INTEGER,
+
+        status TEXT NOT NULL
+            CHECK (
+                status IN (
+                    'running',
+                    'completed',
+                    'failed'
+                )
+            ),
+
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+
+        FOREIGN KEY (run_id)
+            REFERENCES runs(run_id)
+            ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS evaluation_results (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        evaluation_id TEXT NOT NULL,
+
+        case_id TEXT NOT NULL,
+        evaluator_name TEXT NOT NULL,
+
+        passed INTEGER
+            CHECK (
+                passed IS NULL
+                OR passed IN (0, 1)
+            ),
+
+        score REAL,
+
+        explanation TEXT,
+
+        details_json TEXT NOT NULL,
+
+        duration_ms REAL NOT NULL,
+
+        created_at TEXT NOT NULL,
+
+        FOREIGN KEY (evaluation_id)
+            REFERENCES evaluation_runs(evaluation_id)
+            ON DELETE CASCADE,
+
+        UNIQUE(
+            evaluation_id,
+            case_id,
+            evaluator_name
+        )
+    );
+
+    CREATE TABLE IF NOT EXISTS evaluation_metrics (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        evaluation_id TEXT NOT NULL,
+
+        evaluator_name TEXT NOT NULL,
+        name TEXT NOT NULL,
+
+        value REAL NOT NULL,
+
+        created_at TEXT NOT NULL,
+
+        FOREIGN KEY (evaluation_id)
+            REFERENCES evaluation_runs(evaluation_id)
+            ON DELETE CASCADE,
+
+        UNIQUE(
+            evaluation_id,
+            evaluator_name,
+            name
+        )
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_evaluation_runs_run
+        ON evaluation_runs(run_id);
+
+    CREATE INDEX IF NOT EXISTS idx_evaluation_runs_suite
+        ON evaluation_runs(suite_name);
+
+    CREATE INDEX IF NOT EXISTS idx_evaluation_results_evaluation
+        ON evaluation_results(evaluation_id);
+
+    CREATE INDEX IF NOT EXISTS idx_evaluation_results_case
+        ON evaluation_results(case_id);
+
+    CREATE INDEX IF NOT EXISTS idx_evaluation_results_evaluator
+        ON evaluation_results(evaluator_name);
+
+    CREATE INDEX IF NOT EXISTS idx_evaluation_metrics_evaluation
+        ON evaluation_metrics(evaluation_id);
     """
 }
 
@@ -1143,3 +1250,315 @@ class ResultsDatabase:
         ).fetchone()
 
         return row is not None
+
+    def create_evaluation(
+        self,
+        *,
+        evaluation_id: str,
+        run_id: str | None,
+        suite_name: str,
+        suite_hash: str,
+        evaluator_names: list[str],
+        config: dict[str, Any],
+        seed: int | None,
+        started_at: str,
+    ) -> None:
+        """Create a running evaluation record."""
+
+        if run_id is not None:
+            run = self.get_run(run_id)
+
+            if run is None:
+                raise ValueError(
+                    f"Run '{run_id}' does not exist."
+                )
+
+        evaluator_names_json = json.dumps(
+            evaluator_names,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+        config_json = json.dumps(
+            config,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+        with self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO evaluation_runs (
+                    evaluation_id,
+                    run_id,
+                    suite_name,
+                    suite_hash,
+                    evaluator_names_json,
+                    config_json,
+                    seed,
+                    status,
+                    started_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?)
+                """,
+                (
+                    evaluation_id,
+                    run_id,
+                    suite_name,
+                    suite_hash,
+                    evaluator_names_json,
+                    config_json,
+                    seed,
+                    started_at,
+                ),
+            )
+
+    def complete_evaluation(
+        self,
+        evaluation_id: str,
+        ended_at: str,
+    ) -> None:
+        """Mark an evaluation as completed."""
+
+        with self._connection:
+            cursor = self._connection.execute(
+                """
+                UPDATE evaluation_runs
+                SET status = 'completed',
+                    ended_at = ?
+                WHERE evaluation_id = ?
+                AND status = 'running'
+                """,
+                (
+                    ended_at,
+                    evaluation_id,
+                ),
+            )
+
+        if cursor.rowcount != 1:
+            raise ValueError(
+                f"Cannot complete evaluation "
+                f"'{evaluation_id}'."
+            )
+
+
+    def fail_evaluation(
+        self,
+        evaluation_id: str,
+        ended_at: str,
+    ) -> None:
+        """Mark an evaluation as failed."""
+
+        with self._connection:
+            cursor = self._connection.execute(
+                """
+                UPDATE evaluation_runs
+                SET status = 'failed',
+                    ended_at = ?
+                WHERE evaluation_id = ?
+                AND status = 'running'
+                """,
+                (
+                    ended_at,
+                    evaluation_id,
+                ),
+            )
+
+        if cursor.rowcount != 1:
+            raise ValueError(
+                f"Cannot fail evaluation "
+                f"'{evaluation_id}'."
+            )
+
+    def log_evaluation_result(
+        self,
+        *,
+        evaluation_id: str,
+        case_id: str,
+        evaluator_name: str,
+        passed: bool | None,
+        score: float | None,
+        explanation: str | None,
+        details: dict[str, Any],
+        duration_ms: float,
+        created_at: str,
+    ) -> None:
+        """Persist one case/evaluator result."""
+
+        passed_value = (
+            None
+            if passed is None
+            else int(passed)
+        )
+
+        details_json = json.dumps(
+            details,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+        with self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO evaluation_results (
+                    evaluation_id,
+                    case_id,
+                    evaluator_name,
+                    passed,
+                    score,
+                    explanation,
+                    details_json,
+                    duration_ms,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    evaluation_id,
+                    case_id,
+                    evaluator_name,
+                    passed_value,
+                    score,
+                    explanation,
+                    details_json,
+                    duration_ms,
+                    created_at,
+                ),
+            )
+
+    def log_evaluation_metric(
+        self,
+        *,
+        evaluation_id: str,
+        evaluator_name: str,
+        name: str,
+        value: float,
+        created_at: str,
+    ) -> None:
+        """Persist one aggregate evaluation metric."""
+
+        with self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO evaluation_metrics (
+                    evaluation_id,
+                    evaluator_name,
+                    name,
+                    value,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(
+                    evaluation_id,
+                    evaluator_name,
+                    name
+                )
+                DO UPDATE SET value = excluded.value
+                """,
+                (
+                    evaluation_id,
+                    evaluator_name,
+                    name,
+                    value,
+                    created_at,
+                ),
+            )
+
+    def get_evaluation(
+        self,
+        evaluation_id: str,
+    ) -> dict[str, Any] | None:
+        """Return one evaluation record."""
+
+        row = self._connection.execute(
+            """
+            SELECT *
+            FROM evaluation_runs
+            WHERE evaluation_id = ?
+            """,
+            (evaluation_id,),
+        ).fetchone()
+
+        if row is None:
+            return None
+
+        result = dict(row)
+
+        result["evaluator_names"] = json.loads(
+            result.pop("evaluator_names_json")
+        )
+
+        result["config"] = json.loads(
+            result.pop("config_json")
+        )
+
+        return result
+
+    def get_evaluation_results(
+        self,
+        evaluation_id: str,
+    ) -> list[dict[str, Any]]:
+        """Return all case-level evaluation results."""
+
+        rows = self._connection.execute(
+            """
+            SELECT
+                id,
+                evaluation_id,
+                case_id,
+                evaluator_name,
+                passed,
+                score,
+                explanation,
+                details_json,
+                duration_ms,
+                created_at
+            FROM evaluation_results
+            WHERE evaluation_id = ?
+            ORDER BY id
+            """,
+            (evaluation_id,),
+        ).fetchall()
+
+        results = []
+
+        for row in rows:
+            result = dict(row)
+
+            if result["passed"] is not None:
+                result["passed"] = bool(
+                    result["passed"]
+                )
+
+            result["details"] = json.loads(
+                result.pop("details_json")
+            )
+
+            results.append(result)
+
+        return results
+
+    def get_evaluation_metrics(
+        self,
+        evaluation_id: str,
+    ) -> list[dict[str, Any]]:
+        """Return aggregate evaluation metrics."""
+
+        rows = self._connection.execute(
+            """
+            SELECT
+                evaluator_name,
+                name,
+                value,
+                created_at
+            FROM evaluation_metrics
+            WHERE evaluation_id = ?
+            ORDER BY id
+            """,
+            (evaluation_id,),
+        ).fetchall()
+
+        return [
+            dict(row)
+            for row in rows
+        ]

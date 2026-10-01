@@ -171,30 +171,30 @@ def test_existing_v1_database_is_migrated(
 
     db = ResultsDatabase(db_path)
 
-    assert db.schema_version() == 3
+    assert db.schema_version() == 4
 
-    dataset_tables = db._connection.execute(
-        """
-        SELECT name
-        FROM sqlite_master
-        WHERE type = 'table'
-        AND name IN (
-            'datasets',
-            'dataset_versions',
-            'dataset_files'
-        )
-        ORDER BY name
-        """
+    evaluation_tables = db._connection.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table'
+            AND name IN (
+                'evaluation_runs',
+                'evaluation_results',
+                'evaluation_metrics'
+            )
+            ORDER BY name
+            """
     ).fetchall()
-
+    
     assert [
-        row["name"]
-        for row in dataset_tables
-    ] == [
-        "dataset_files",
-        "dataset_versions",
-        "datasets",
-    ]
+            row["name"]
+            for row in evaluation_tables
+        ] == [
+            "evaluation_metrics",
+            "evaluation_results",
+            "evaluation_runs",
+        ]
 
     db.close()
 
@@ -206,29 +206,29 @@ def test_new_database_starts_at_current_version(
         tmp_path / "new.sqlite"
     )
 
-    assert db.schema_version() == 3
+    assert db.schema_version() == 4
 
-    dataset_tables = db._connection.execute(
+    evaluation_tables = db._connection.execute(
         """
         SELECT name
         FROM sqlite_master
         WHERE type = 'table'
-          AND name IN (
-              'datasets',
-              'dataset_versions',
-              'dataset_files'
-          )
+        AND name IN (
+            'evaluation_runs',
+            'evaluation_results',
+            'evaluation_metrics'
+        )
         ORDER BY name
         """
     ).fetchall()
 
     assert [
         row["name"]
-        for row in dataset_tables
+        for row in evaluation_tables
     ] == [
-        "dataset_files",
-        "dataset_versions",
-        "datasets",
+        "evaluation_metrics",
+        "evaluation_results",
+        "evaluation_runs",
     ]
 
     db.close()
