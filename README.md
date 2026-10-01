@@ -7,7 +7,7 @@ Shared research tooling built for my [AI Research Ecosystem](https://github.com/
 ## Components
 - [x] Experiment tracker (config + seed → result, queryable)
 - [x] Config system (runs driven by files, not hardcoded values)
-- [ ] Dataset versioning
+- [x] Dataset versioning
 - [x] Checkpoint manager
 - [ ] Shared evaluation framework
 - [ ] Unified logging
@@ -25,11 +25,14 @@ Current run metadata includes:
 - configuration snapshot and deterministic configuration hash
 - random seed
 - Git commit
-- dataset version
+- registered dataset version
 - lifecycle status
 - metric history
 - parameters and tags
 - registered artifacts
+
+Dataset versions are content-addressed through a canonical file
+manifest and SHA-256 identity.
 
 Checkpoints additionally store size and SHA-256 integrity metadata and
 support latest/best checkpoint selection and integrity-verified loading.
@@ -69,6 +72,45 @@ with tracker.run(config) as run:
 Consuming repositories depend on these public interfaces rather than
 SQLite tables or internal implementation modules.
 
+## Reproducibility Model
+
+```text
+             Experiment
+                  │
+      ┌───────────┼───────────┐
+      ▼           ▼           ▼
+    Config       Code       Dataset
+      │           │           │
+ config_hash  git_commit  version_id
+      │           │           │
+      └───────────┼───────────┘
+                  ▼
+             Run identity
+                  │
+             ┌────┴────┐
+             ▼         ▼
+        Checkpoints  Metrics
+             │
+          SHA-256
+```
+
+## Checkpointing
+
+Checkpoints are managed independently from model serialization.
+
+The checkpoint manager provides:
+
+- atomic file writes
+- SHA-256 integrity verification
+- checkpoint metadata
+- latest checkpoint tracking
+- best-checkpoint tracking by metric
+- safe restore with integrity verification
+
+Model-specific serialization is supplied by the consuming project.
+For example, a PyTorch repository can provide `torch.save` / `torch.load`
+through the checkpoint manager's writer/reader interface.
+
 ## Database migrations
 
 The results database maintains an explicit schema version and applies
@@ -77,26 +119,22 @@ incremental migrations when the infrastructure is updated.
 Existing experiment history is preserved when new infrastructure
 components introduce additional tables.
 
+## Dataset versioning
+
+Datasets are registered as immutable content-based versions.
+
+A dataset version is identified by:
+
+```text
+dataset contents
+    ↓
+file-level SHA-256 hashes
+    ↓
+canonical manifest
+    ↓
+SHA-256 version identity
+```
+
 ## Used by
 
 Not yet integrated by another ecosystem repository.
-
-## Current Milestone
-
-**v0.2 — Core experiment persistence**
-
-Implemented:
-
-- configuration validation
-- deterministic configuration hashing
-- experiment lifecycle tracking
-- SQLite results database
-- schema migrations
-- metric and parameter logging
-- tags
-- artifact registration
-- atomic checkpoint persistence
-- SHA-256 checkpoint integrity verification
-- latest/best checkpoint tracking
-- public package APIs
-- integration tests

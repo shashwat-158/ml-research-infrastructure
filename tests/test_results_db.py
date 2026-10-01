@@ -1,7 +1,11 @@
 import sqlite3
 from pathlib import Path
 
+import pytest
+
+from ml_infra.config import RunConfig
 from ml_infra.results_db import ResultsDatabase
+from ml_infra.tracker import ExperimentTracker
 
 
 def test_create_and_retrieve_run(tmp_path: Path) -> None:
@@ -21,7 +25,7 @@ def test_create_and_retrieve_run(tmp_path: Path) -> None:
             "seed": 42,
         },
         git_commit="deadbeef",
-        dataset_version="dataset-v1",
+        dataset_version=None,
         started_at="2026-10-01T00:00:00+00:00",
         tags={
             "stage": "baseline",
@@ -36,7 +40,7 @@ def test_create_and_retrieve_run(tmp_path: Path) -> None:
     assert run["seed"] == 42
     assert run["config_hash"] == "abc123"
     assert run["git_commit"] == "deadbeef"
-    assert run["dataset_version"] == "dataset-v1"
+    assert run["dataset_version"] is None
     assert run["status"] == "running"
     assert run["config"]["seed"] == 42
 
@@ -167,18 +171,30 @@ def test_existing_v1_database_is_migrated(
 
     db = ResultsDatabase(db_path)
 
-    assert db.schema_version() == 2
+    assert db.schema_version() == 3
 
-    tables = db._connection.execute(
+    dataset_tables = db._connection.execute(
         """
         SELECT name
         FROM sqlite_master
         WHERE type = 'table'
-          AND name = 'checkpoints'
+        AND name IN (
+            'datasets',
+            'dataset_versions',
+            'dataset_files'
+        )
+        ORDER BY name
         """
-    ).fetchone()
+    ).fetchall()
 
-    assert tables is not None
+    assert [
+        row["name"]
+        for row in dataset_tables
+    ] == [
+        "dataset_files",
+        "dataset_versions",
+        "datasets",
+    ]
 
     db.close()
 
@@ -190,6 +206,52 @@ def test_new_database_starts_at_current_version(
         tmp_path / "new.sqlite"
     )
 
-    assert db.schema_version() == 2
+    assert db.schema_version() == 3
+
+    dataset_tables = db._connection.execute(
+        """
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'table'
+          AND name IN (
+              'datasets',
+              'dataset_versions',
+              'dataset_files'
+          )
+        ORDER BY name
+        """
+    ).fetchall()
+
+    assert [
+        row["name"]
+        for row in dataset_tables
+    ] == [
+        "dataset_files",
+        "dataset_versions",
+        "datasets",
+    ]
+
+    db.close()
+
+def test_run_requires_registered_dataset_version(
+    tmp_path,
+) -> None:
+
+    db = ResultsDatabase(
+        tmp_path / "results.sqlite"
+    )
+
+    tracker = ExperimentTracker(db)
+
+    config = RunConfig(
+        project="dataset-test",
+        run_name="baseline",
+    )
+
+    with pytest.raises(ValueError), tracker.run(
+        config,
+        dataset_version="does-not-exist",
+    ):
+        pass
 
     db.close()

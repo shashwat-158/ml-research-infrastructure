@@ -2,6 +2,9 @@ from pathlib import Path
 
 from ml_infra.checkpoints import CheckpointManager
 from ml_infra.config import RunConfig
+from ml_infra.data_versioning import (
+    DatasetVersionManager,
+)
 from ml_infra.results_db import ResultsDatabase
 from ml_infra.tracker import ExperimentTracker
 
@@ -27,6 +30,32 @@ def test_end_to_end_experiment_workflow(
         },
     )
 
+    dataset = (
+        tmp_path / "dataset.csv"
+    )
+
+    dataset.write_text(
+        "x,y\n1,2\n3,4\n",
+        encoding="utf-8",
+    )
+
+    dataset_manager = DatasetVersionManager(
+        db
+    )
+
+    dataset_version = (
+        dataset_manager.register(
+            dataset_id="integration-dataset",
+            path=dataset,
+            source="local://integration-dataset",
+            sample_count=2,
+            schema={
+                "x": "int",
+                "y": "int",
+            },
+        )
+    )
+
     tracker = ExperimentTracker(db)
 
     checkpoint_manager = CheckpointManager(
@@ -44,7 +73,7 @@ def test_end_to_end_experiment_workflow(
     with tracker.run(
         config,
         git_commit="integration-test-commit",
-        dataset_version="dataset-v1",
+        dataset_version=dataset_version.version_id,
     ) as run:
 
         run.log_metric(
@@ -103,7 +132,7 @@ def test_end_to_end_experiment_workflow(
         "integration-test-commit"
     )
     assert stored_run["dataset_version"] == (
-        "dataset-v1"
+        dataset_version.version_id
     )
     assert stored_run["status"] == "completed"
 
@@ -186,5 +215,31 @@ def test_end_to_end_experiment_workflow(
     assert len(artifacts) == 1
     assert artifacts[0]["name"] == "metrics.txt"
     assert artifacts[0]["artifact_type"] == "text"
+
+    # ---------------------------------------------------------
+    # Dataset metadata and integrity
+    # ---------------------------------------------------------
+
+    stored_dataset = (
+        dataset_manager.get(
+            dataset_version.version_id
+        )
+    )
+
+    assert stored_dataset.dataset_id == (
+        "integration-dataset"
+    )
+
+    assert stored_dataset.sample_count == 2
+
+    assert stored_dataset.schema == {
+        "x": "int",
+        "y": "int",
+    }
+
+    dataset_manager.verify(
+        dataset_version.version_id,
+        dataset,
+    )
 
     db.close()

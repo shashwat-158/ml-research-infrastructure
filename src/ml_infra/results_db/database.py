@@ -3,7 +3,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Self
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 
 SCHEMA_V1 = """
@@ -157,6 +157,60 @@ MIGRATIONS = {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_one_best_checkpoint_per_metric
         ON checkpoints(run_id, metric_name)
         WHERE is_best = 1;
+    """,
+    3: """
+    CREATE TABLE IF NOT EXISTS datasets (
+        dataset_id TEXT PRIMARY KEY,
+
+        created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS dataset_versions (
+        version_id TEXT PRIMARY KEY,
+
+        dataset_id TEXT NOT NULL,
+
+        source TEXT NOT NULL,
+
+        manifest_json TEXT NOT NULL,
+
+        sample_count INTEGER,
+
+        schema_json TEXT,
+
+        created_at TEXT NOT NULL,
+
+        FOREIGN KEY (dataset_id)
+            REFERENCES datasets(dataset_id)
+            ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS dataset_files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        version_id TEXT NOT NULL,
+
+        relative_path TEXT NOT NULL,
+
+        size_bytes INTEGER NOT NULL,
+
+        sha256 TEXT NOT NULL,
+
+        FOREIGN KEY (version_id)
+            REFERENCES dataset_versions(version_id)
+            ON DELETE CASCADE,
+
+        UNIQUE(version_id, relative_path)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dataset_versions_dataset
+        ON dataset_versions(dataset_id);
+
+    CREATE INDEX IF NOT EXISTS idx_dataset_files_version
+        ON dataset_files(version_id);
+
+    CREATE INDEX IF NOT EXISTS idx_dataset_files_sha256
+        ON dataset_files(sha256);
     """
 }
 
@@ -325,6 +379,15 @@ class ResultsDatabase:
         started_at: str,
         tags: dict[str, str],
     ) -> None:
+
+        if dataset_version is not None:
+            if not self.dataset_version_exists(
+                dataset_version
+            ):
+                raise ValueError(
+                    f"Dataset version '{dataset_version}' "
+                    "does not exist."
+                )
 
         config_json = json.dumps(
             config,
@@ -843,3 +906,240 @@ class ResultsDatabase:
             dict(row)
             for row in rows
         ]
+
+    def create_dataset(
+        self,
+        *,
+        dataset_id: str,
+        created_at: str,
+    ) -> None:
+        """Create a logical dataset if it does not already exist."""
+
+        with self._connection:
+            self._connection.execute(
+                """
+                INSERT OR IGNORE INTO datasets (
+                    dataset_id,
+                    created_at
+                )
+                VALUES (?, ?)
+                """,
+                (
+                    dataset_id,
+                    created_at,
+                ),
+            )
+
+    def create_dataset_version(
+        self,
+        *,
+        version_id: str,
+        dataset_id: str,
+        source: str,
+        manifest: dict[str, Any],
+        sample_count: int | None,
+        schema: dict[str, Any] | None,
+        created_at: str,
+        files: list[dict[str, Any]],
+    ) -> None:
+        """
+        Persist an immutable dataset version and its file manifest.
+
+        Re-registering an existing version is a no-op.
+        """
+
+        manifest_json = json.dumps(
+            manifest,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+        schema_json = (
+            json.dumps(
+                schema,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            if schema is not None
+            else None
+        )
+
+        with self._connection:
+            self._connection.execute(
+                """
+                INSERT OR IGNORE INTO datasets (
+                    dataset_id,
+                    created_at
+                )
+                VALUES (?, ?)
+                """,
+                (
+                    dataset_id,
+                    created_at,
+                ),
+            )
+
+            existing = self._connection.execute(
+                """
+                SELECT version_id
+                FROM dataset_versions
+                WHERE version_id = ?
+                """,
+                (version_id,),
+            ).fetchone()
+
+            if existing is not None:
+                return
+
+            self._connection.execute(
+                """
+                INSERT INTO dataset_versions (
+                    version_id,
+                    dataset_id,
+                    source,
+                    manifest_json,
+                    sample_count,
+                    schema_json,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    version_id,
+                    dataset_id,
+                    source,
+                    manifest_json,
+                    sample_count,
+                    schema_json,
+                    created_at,
+                ),
+            )
+
+            for file_record in files:
+                self._connection.execute(
+                    """
+                    INSERT INTO dataset_files (
+                        version_id,
+                        relative_path,
+                        size_bytes,
+                        sha256
+                    )
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        version_id,
+                        file_record["relative_path"],
+                        file_record["size_bytes"],
+                        file_record["sha256"],
+                    ),
+                )
+
+    def get_dataset_version(
+        self,
+        version_id: str,
+    ) -> dict[str, Any] | None:
+        """Return one dataset version."""
+
+        row = self._connection.execute(
+            """
+            SELECT
+                version_id,
+                dataset_id,
+                source,
+                manifest_json,
+                sample_count,
+                schema_json,
+                created_at
+            FROM dataset_versions
+            WHERE version_id = ?
+            """,
+            (version_id,),
+        ).fetchone()
+
+        if row is None:
+            return None
+
+        result = dict(row)
+
+        result["manifest"] = json.loads(
+            result.pop("manifest_json")
+        )
+
+        schema_json = result.pop(
+            "schema_json"
+        )
+
+        result["schema"] = (
+            json.loads(schema_json)
+            if schema_json is not None
+            else None
+        )
+
+        return result
+
+    def get_dataset_files(
+        self,
+        version_id: str,
+    ) -> list[dict[str, Any]]:
+        """Return all files belonging to a dataset version."""
+
+        rows = self._connection.execute(
+            """
+            SELECT
+                relative_path,
+                size_bytes,
+                sha256
+            FROM dataset_files
+            WHERE version_id = ?
+            ORDER BY relative_path
+            """,
+            (version_id,),
+        ).fetchall()
+
+        return [
+            dict(row)
+            for row in rows
+        ]
+
+    def list_dataset_versions(
+        self,
+        dataset_id: str,
+    ) -> list[dict[str, Any]]:
+        """Return all versions belonging to a dataset."""
+
+        rows = self._connection.execute(
+            """
+            SELECT
+                version_id,
+                dataset_id,
+                source,
+                sample_count,
+                created_at
+            FROM dataset_versions
+            WHERE dataset_id = ?
+            ORDER BY created_at
+            """,
+            (dataset_id,),
+        ).fetchall()
+
+        return [
+            dict(row)
+            for row in rows
+        ]
+
+    def dataset_version_exists(
+        self,
+        version_id: str,
+    ) -> bool:
+        """Return whether a dataset version exists."""
+
+        row = self._connection.execute(
+            """
+            SELECT 1
+            FROM dataset_versions
+            WHERE version_id = ?
+            """,
+            (version_id,),
+        ).fetchone()
+
+        return row is not None

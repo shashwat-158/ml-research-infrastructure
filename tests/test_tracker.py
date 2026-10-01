@@ -32,10 +32,10 @@ def test_tracker_completes_successful_run(
 
     config = make_config()
 
+    # Dataset version is intentionally omitted here to test the tracker in isolation
     with tracker.run(
         config,
         git_commit="abc123",
-        dataset_version="dataset-v1",
     ) as run:
 
         run.log_metric(
@@ -66,7 +66,6 @@ def test_tracker_completes_successful_run(
     assert stored_run["status"] == "completed"
     assert stored_run["seed"] == 42
     assert stored_run["git_commit"] == "abc123"
-    assert stored_run["dataset_version"] == "dataset-v1"
 
     metrics = db.get_metrics(
         stored_run["run_id"]
@@ -130,8 +129,6 @@ def test_artifact_registration(
             artifact_type="text",
         )
 
-    # tests should preferably exercise the public interface, not the internals
-    # row = db._connection.execute(
     artifacts = db.get_artifacts(
         run.run_id
     )
