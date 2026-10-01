@@ -3,7 +3,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Self
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 
 
 SCHEMA_V1 = """
@@ -318,6 +318,59 @@ MIGRATIONS = {
 
     CREATE INDEX IF NOT EXISTS idx_evaluation_metrics_evaluation
         ON evaluation_metrics(evaluation_id);
+    """,
+    5: """
+    CREATE TABLE IF NOT EXISTS logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        timestamp TEXT NOT NULL,
+
+        level TEXT NOT NULL
+            CHECK (
+                level IN (
+                    'DEBUG',
+                    'INFO',
+                    'WARNING',
+                    'ERROR',
+                    'CRITICAL'
+                )
+            ),
+
+        logger_name TEXT NOT NULL,
+
+        event TEXT NOT NULL,
+
+        message TEXT NOT NULL,
+
+        run_id TEXT,
+
+        evaluation_id TEXT,
+
+        data_json TEXT NOT NULL,
+
+        FOREIGN KEY (run_id)
+            REFERENCES runs(run_id)
+            ON DELETE CASCADE,
+
+        FOREIGN KEY (evaluation_id)
+            REFERENCES evaluation_runs(evaluation_id)
+            ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_logs_timestamp
+        ON logs(timestamp);
+
+    CREATE INDEX IF NOT EXISTS idx_logs_run
+        ON logs(run_id);
+
+    CREATE INDEX IF NOT EXISTS idx_logs_evaluation
+        ON logs(evaluation_id);
+
+    CREATE INDEX IF NOT EXISTS idx_logs_level
+        ON logs(level);
+
+    CREATE INDEX IF NOT EXISTS idx_logs_event
+        ON logs(event);
     """
 }
 
@@ -487,14 +540,11 @@ class ResultsDatabase:
         tags: dict[str, str],
     ) -> None:
 
-        if dataset_version is not None:
-            if not self.dataset_version_exists(
-                dataset_version
-            ):
-                raise ValueError(
-                    f"Dataset version '{dataset_version}' "
-                    "does not exist."
-                )
+        if dataset_version is not None and not self.dataset_version_exists(dataset_version):
+            raise ValueError(
+                f"Dataset version '{dataset_version}' "
+                "does not exist."
+            )
 
         config_json = json.dumps(
             config,
@@ -1562,3 +1612,136 @@ class ResultsDatabase:
             dict(row)
             for row in rows
         ]
+
+    def log_event(
+        self,
+        *,
+        timestamp: str,
+        level: str,
+        logger_name: str,
+        event: str,
+        message: str,
+        run_id: str | None,
+        evaluation_id: str | None,
+        data: dict[str, Any],
+    ) -> None:
+        """Persist one structured log event."""
+
+        data_json = json.dumps(
+            data,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+        with self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO logs (
+                    timestamp,
+                    level,
+                    logger_name,
+                    event,
+                    message,
+                    run_id,
+                    evaluation_id,
+                    data_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    timestamp,
+                    level,
+                    logger_name,
+                    event,
+                    message,
+                    run_id,
+                    evaluation_id,
+                    data_json,
+                ),
+            )
+
+    def get_logs(
+        self,
+        *,
+        run_id: str | None = None,
+        evaluation_id: str | None = None,
+        level: str | None = None,
+        event: str | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """
+        Query structured log events.
+
+        Results are returned in insertion order, newest last.
+        """
+
+        if limit <= 0:
+            raise ValueError(
+                "limit must be greater than zero."
+            )
+
+        query = """
+            SELECT
+                id,
+                timestamp,
+                level,
+                logger_name,
+                event,
+                message,
+                run_id,
+                evaluation_id,
+                data_json
+            FROM logs
+            WHERE 1 = 1
+        """
+
+        parameters: list[Any] = []
+
+        if run_id is not None:
+            query += """
+                AND run_id = ?
+            """
+            parameters.append(run_id)
+
+        if evaluation_id is not None:
+            query += """
+                AND evaluation_id = ?
+            """
+            parameters.append(evaluation_id)
+
+        if level is not None:
+            query += """
+                AND level = ?
+            """
+            parameters.append(level)
+
+        if event is not None:
+            query += """
+                AND event = ?
+            """
+            parameters.append(event)
+
+        query += """
+            ORDER BY id ASC
+            LIMIT ?
+        """
+
+        parameters.append(limit)
+
+        rows = self._connection.execute(
+            query,
+            parameters,
+        ).fetchall()
+
+        logs = []
+
+        for row in rows:
+            result = dict(row)
+
+            result["data"] = json.loads(
+                result.pop("data_json")
+            )
+
+            logs.append(result)
+
+        return logs

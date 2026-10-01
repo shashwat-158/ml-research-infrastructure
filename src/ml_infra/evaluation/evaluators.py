@@ -35,7 +35,7 @@ def _safe_equal(
 
     try:
         result = actual == expected
-    except Exception:
+    except Exception: # noqa: BLE001
         return False
 
     if isinstance(result, bool):

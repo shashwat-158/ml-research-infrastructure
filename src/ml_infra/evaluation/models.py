@@ -130,13 +130,10 @@ class EvaluationDecision:
     )
 
     def __post_init__(self) -> None:
-        if self.score is not None:
-            if not math.isfinite(
-                float(self.score)
-            ):
-                raise ValueError(
-                    "score must be finite."
-                )
+        if self.score is not None and not math.isfinite(float(self.score)):
+            raise ValueError(
+                "score must be finite."
+            )
 
 
 @dataclass(frozen=True)

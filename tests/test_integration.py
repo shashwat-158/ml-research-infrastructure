@@ -242,4 +242,20 @@ def test_end_to_end_experiment_workflow(
         dataset,
     )
 
+    logs = db.get_logs(
+        run_id=run_id
+    )
+
+    events = [
+        log["event"]
+        for log in logs
+    ]
+
+    assert "run.started" in events
+    assert "run.completed" in events
+
+    assert events.count(
+        "checkpoint.saved"
+    ) == 2
+
     db.close()

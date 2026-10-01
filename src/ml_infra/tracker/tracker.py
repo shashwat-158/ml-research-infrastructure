@@ -8,6 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 from ml_infra.config import RunConfig, config_hash
+from ml_infra.logging import ResearchLogger
 from ml_infra.results_db import ResultsDatabase
 
 
@@ -149,8 +150,17 @@ class ExperimentTracker:
     def __init__(
         self,
         db: ResultsDatabase,
+        logger: ResearchLogger | None = None,
     ):
         self.db = db
+        self.logger = (
+            logger
+            if logger is not None
+            else ResearchLogger(
+                db,
+                name="ml_infra.tracker",
+            )
+        )
 
     @contextmanager
     def run(
@@ -189,6 +199,21 @@ class ExperimentTracker:
             tags=config.tags,
         )
 
+        run_logger = self.logger.bind(
+            run_id=run_id
+        )
+
+        run_logger.info(
+            "run.started",
+            "Experiment run started.",
+            data={
+                "project": config.project,
+                "run_name": config.run_name,
+                "seed": config.seed,
+                "config_hash": config_hash(config),
+            },
+        )
+
         active_run = ActiveRun(
             tracker=self,
             run_id=run_id,
@@ -197,15 +222,30 @@ class ExperimentTracker:
         try:
             yield active_run
 
-        except Exception:
+        except Exception as exc:
             self.db.fail_run(
                 run_id,
                 ended_at=utc_now(),
             )
+
+            run_logger.error(
+                "run.failed",
+                "Experiment run failed.",
+                data={
+                    "exception_type": type(exc).__name__,
+                    "exception_message": str(exc),
+                },
+            )
+
             raise
 
         else:
             self.db.complete_run(
                 run_id,
                 ended_at=utc_now(),
+            )
+
+            run_logger.info(
+                "run.completed",
+                "Experiment run completed.",
             )

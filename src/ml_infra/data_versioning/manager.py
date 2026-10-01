@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ml_infra.logging import ResearchLogger
 from ml_infra.results_db import ResultsDatabase
 
 from .models import (
@@ -21,8 +22,18 @@ class DatasetVersionManager:
     def __init__(
         self,
         db: ResultsDatabase,
+        logger: ResearchLogger | None = None,
     ):
         self.db = db
+
+        self.logger = (
+            logger
+            if logger is not None
+            else ResearchLogger(
+                db,
+                name="ml_infra.data_versioning",
+            )
+        )
 
     @staticmethod
     def _utc_now() -> str:
@@ -226,11 +237,10 @@ class DatasetVersionManager:
                     "sample_count cannot be negative."
                 )
 
-        if schema is not None:
-            if not isinstance(schema, dict):
-                raise TypeError(
-                    "schema must be a dictionary."
-                )
+        if schema is not None and not isinstance(schema, dict):
+            raise TypeError(
+                "schema must be a dictionary."
+            )
 
         path = Path(path)
 
@@ -264,6 +274,17 @@ class DatasetVersionManager:
                 }
                 for file in files
             ],
+        )
+
+        self.logger.info(
+            "dataset.registered",
+            "Dataset version registered.",
+            data={
+                "dataset_id": dataset_id,
+                "version_id": version_id,
+                "file_count": len(files),
+                "sample_count": sample_count,
+            },
         )
 
         return self.get(version_id)
@@ -374,9 +395,31 @@ class DatasetVersionManager:
         )
 
         if current_version_id != version_id:
+            # --- ADD EDIT 3 HERE ---
+            self.logger.error(
+                "dataset.verification_failed",
+                "Dataset integrity verification failed.",
+                data={
+                    "dataset_id": expected.dataset_id,
+                    "version_id": version_id,
+                    "actual_version_id": current_version_id,
+                },
+            )
+            # -----------------------
+
             raise DatasetIntegrityError(
                 "Dataset contents do not match "
                 f"version '{version_id}'. "
                 f"Expected version: {version_id}; "
                 f"actual version: {current_version_id}."
             )
+            
+        # --- ADD EDIT 2 HERE ---
+        self.logger.info(
+            "dataset.verified",
+            "Dataset integrity verified.",
+            data={
+                "dataset_id": expected.dataset_id,
+                "version_id": version_id,
+            },
+        )

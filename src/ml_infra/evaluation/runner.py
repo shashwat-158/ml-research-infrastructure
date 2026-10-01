@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+from ml_infra.logging import ResearchLogger
 from ml_infra.results_db import ResultsDatabase
 
 from .aggregation import summarize
@@ -31,8 +32,17 @@ class EvaluationRunner:
     def __init__(
         self,
         db: ResultsDatabase,
+        logger: ResearchLogger | None = None,
     ):
         self.db = db
+        self.logger = (
+            logger
+            if logger is not None
+            else ResearchLogger(
+                db,
+                name="ml_infra.evaluation",
+            )
+        )
 
     def run(
         self,
@@ -97,6 +107,22 @@ class EvaluationRunner:
             config=config,
             seed=seed,
             started_at=utc_now(),
+        )
+
+        evaluation_logger = self.logger.bind(
+            run_id=run_id,
+            evaluation_id=evaluation_id,
+        )
+
+        evaluation_logger.info(
+            "evaluation.started",
+            "Evaluation started.",
+            data={
+                "suite_name": suite.name,
+                "suite_hash": suite_hash,
+                "case_count": len(suite.cases),
+                "evaluator_names": evaluator_names,
+            },
         )
 
         results: list[CaseEvaluation] = []
@@ -170,11 +196,28 @@ class EvaluationRunner:
                 ended_at=utc_now(),
             )
 
-        except Exception:
+            evaluation_logger.info(
+                "evaluation.completed",
+                "Evaluation completed.",
+                data={
+                    "result_count": len(results),
+                },
+            )
+
+        except Exception as exc:
 
             self.db.fail_evaluation(
                 evaluation_id,
                 ended_at=utc_now(),
+            )
+
+            evaluation_logger.error(
+                "evaluation.failed",
+                "Evaluation failed.",
+                data={
+                    "exception_type": type(exc).__name__,
+                    "exception_message": str(exc),
+                },
             )
 
             raise
