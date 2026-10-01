@@ -159,7 +159,7 @@ def test_best_checkpoint_with_min_mode(
         mode="min",
     )
 
-    # 1. Verify the targeted query returns the correct checkpoint
+    # 1. Verify the targeted query → returns the correct current best checkpoint
     best = manager.best(
         run_id,
         "val_loss",

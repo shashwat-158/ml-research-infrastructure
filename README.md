@@ -8,7 +8,7 @@ Shared research tooling built for my [AI Research Ecosystem](https://github.com/
 - [x] Experiment tracker (config + seed → result, queryable)
 - [x] Config system (runs driven by files, not hardcoded values)
 - [ ] Dataset versioning
-- [ ] Checkpoint manager
+- [x] Checkpoint manager
 - [ ] Shared evaluation framework
 - [ ] Unified logging
 - [ ] Benchmark runner
@@ -36,6 +36,31 @@ with tracker.run(config) as run:
 Each run records its configuration snapshot, configuration hash,
 random seed, Git commit, dataset version, lifecycle status, metrics,
 parameters, tags, and registered artifacts.
+
+## Checkpointing
+
+Checkpoints are managed independently from model serialization.
+
+The checkpoint manager provides:
+
+- atomic file writes
+- SHA-256 integrity verification
+- checkpoint metadata
+- latest checkpoint tracking
+- best-checkpoint tracking by metric
+- safe restore with integrity verification
+
+Model-specific serialization is supplied by the consuming project.
+For example, a PyTorch repository can provide `torch.save` / `torch.load`
+through the checkpoint manager's writer/reader interface.
+
+## Database migrations
+
+The results database maintains an explicit schema version and applies
+incremental migrations when the infrastructure is updated.
+
+Existing experiment history is preserved when new infrastructure
+components introduce additional tables.
 
 ## Used by
 - 
