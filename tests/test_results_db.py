@@ -1,6 +1,5 @@
-from pathlib import Path
-
 import sqlite3
+from pathlib import Path
 
 from ml_infra.results_db import ResultsDatabase
 

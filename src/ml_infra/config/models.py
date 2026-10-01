@@ -3,6 +3,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+
 # inheriting from BaseModel, RunConfig automatically inherits all of Pydantic's built-in
 class RunConfig(BaseModel):
     """

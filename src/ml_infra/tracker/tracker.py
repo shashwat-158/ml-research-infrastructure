@@ -1,9 +1,10 @@
 import hashlib
 import subprocess
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 from uuid import uuid4
 
 from ml_infra.config import RunConfig, config_hash

@@ -1,8 +1,7 @@
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any
-
+from typing import Any, Self
 
 CURRENT_SCHEMA_VERSION = 2
 
@@ -301,7 +300,7 @@ class ResultsDatabase:
 
         self._connection.close()
 
-    def __enter__(self) -> "ResultsDatabase":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(
@@ -807,6 +806,35 @@ class ResultsDatabase:
             FROM checkpoints
             WHERE run_id = ?
             ORDER BY created_at
+            """,
+            (run_id,),
+        ).fetchall()
+
+        return [
+            dict(row)
+            for row in rows
+        ]
+
+    def get_artifacts(
+        self,
+        run_id: str,
+    ) -> list[dict[str, Any]]:
+        """Return all artifacts registered for a run."""
+
+        rows = self._connection.execute(
+            """
+            SELECT
+                id,
+                run_id,
+                name,
+                path,
+                artifact_type,
+                size_bytes,
+                sha256,
+                created_at
+            FROM artifacts
+            WHERE run_id = ?
+            ORDER BY id
             """,
             (run_id,),
         ).fetchall()

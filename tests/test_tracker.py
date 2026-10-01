@@ -86,18 +86,17 @@ def test_tracker_marks_failed_run(
 
     config = make_config()
 
-    with pytest.raises(RuntimeError):
-        with tracker.run(config) as run:
+    with pytest.raises(RuntimeError), tracker.run(config) as run:
 
-            run.log_metric(
-                "train_loss",
-                3.0,
-                step=1,
-            )
+        run.log_metric(
+            "train_loss",
+            3.0,
+            step=1,
+        )
 
-            raise RuntimeError(
-                "simulated training failure"
-            )
+        raise RuntimeError(
+            "simulated training failure"
+        )
 
     runs = db.list_runs(
         project="test-project"
@@ -132,20 +131,16 @@ def test_artifact_registration(
         )
 
     # tests should preferably exercise the public interface, not the internals
-    row = db._connection.execute(
-        """
-        SELECT
-            name,
-            path,
-            artifact_type,
-            size_bytes,
-            sha256
-        FROM artifacts
-        """
-    ).fetchone()
+    # row = db._connection.execute(
+    artifacts = db.get_artifacts(
+        run.run_id
+    )
 
-    assert row is not None
-    assert row["name"] == "results.txt"
-    assert row["artifact_type"] == "text"
-    assert row["size_bytes"] > 0
-    assert len(row["sha256"]) == 64
+    assert len(artifacts) == 1
+
+    artifact_record = artifacts[0]
+
+    assert artifact_record["name"] == "results.txt"
+    assert artifact_record["artifact_type"] == "text"
+    assert artifact_record["size_bytes"] > 0
+    assert len(artifact_record["sha256"]) == 64

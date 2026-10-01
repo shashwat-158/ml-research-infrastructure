@@ -5,6 +5,6 @@ from .models import RunConfig
 
 __all__ = [
     "RunConfig",
-    "load_config",
     "config_hash",
+    "load_config",
 ]

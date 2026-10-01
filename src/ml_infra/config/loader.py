@@ -7,6 +7,7 @@ import yaml
 
 from .models import RunConfig
 
+
 # Defensive Ingestion, Rather than blindly trusting user-provided YAML files,
 def load_config(path: str | Path) -> RunConfig:
     """
@@ -33,7 +34,7 @@ def load_config(path: str | Path) -> RunConfig:
         raise ValueError(f"Configuration file is empty: {path}")
 
     if not isinstance(raw_config, dict):
-        raise ValueError("Top-level configuration must be a YAML mapping/object.")
+        raise TypeError("Top-level configuration must be a YAML mapping/object.")
 
     return RunConfig.model_validate(raw_config)
 
